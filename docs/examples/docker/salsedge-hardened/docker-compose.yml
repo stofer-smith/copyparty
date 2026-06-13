@@ -1,0 +1,48 @@
+---
+# SALS Edge hardened copyparty deployment.
+#
+# Posture:
+#   - non-root (user 1000:1000)
+#   - TLS terminated upstream at Nginx; copyparty bound to localhost only
+#   - WebDAV / HTTP only (no SMB over WAN)
+#   - read-only container rootfs; only data + state are writable
+#   - dropped Linux capabilities, no privilege escalation
+#
+# Edit copyparty.conf (accounts, volumes, allowed IPs) before deploying.
+
+services:
+  copyparty:
+    image: copyparty/ac:latest          # ac = thumbnails + media tags; use copyparty/min for none
+    container_name: copyparty
+    user: "1000:1000"                    # never root — set to your service UID:GID
+
+    # Bind to loopback only. Nginx (on the host or another container) terminates
+    # TLS and proxies to 127.0.0.1:3923. Do NOT expose 3923 to the internet.
+    ports:
+      - "127.0.0.1:3923:3923"
+
+    volumes:
+      - ./:/cfg:z                        # config folder: copyparty.conf lives here
+      - /srv/copyparty/data:/w:z         # the actual fileshare (change to your path)
+
+    environment:
+      LD_PRELOAD: /usr/lib/libmimalloc-secure.so.2   # speed boost; ~2x RAM. Drop if RAM-tight.
+      PYTHONUNBUFFERED: 1
+
+    # --- hardening ---
+    read_only: true                      # immutable rootfs; copyparty only writes to /cfg and /w
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    restart: unless-stopped
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q 127.0.0.1:3923/?reset=/._"]
+      interval: 1m
+      timeout: 2s
+      retries: 5
+      start_period: 15s
